@@ -18,6 +18,13 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 
+## Recent Changes
+
+- Auto Chat hides the 2nd WhatsApp connect button after the second account is connected and shows live status with message counts and a stop button.
+- Auto Chat uses random delay rotation across 30 seconds, 1 minute, 5 minutes, 10 minutes, 20 minutes, 30 minutes, and 1 hour.
+- Group Auto Chat supports selecting multiple common groups and rotates Account 1 then Account 2 in the same group before moving to the next group.
+- Auto Chat bot screens and `/help` copy are in English while WhatsApp auto-chat messages remain Hinglish/original.
+
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck across all packages
@@ -32,5 +39,9 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `MONGODB_URI` is optional at startup, but needed for persisted bot data and WhatsApp session restore.
 - `MONGODB_DB_NAME` defaults to `whatsapp_bot` when not set.
 - `ADMIN_USER_ID` and `FORCE_SUB_CHANNEL` are optional bot controls.
+
+## GitHub Access Note
+
+- The GitHub integration flow was dismissed, so repository publishing used the `GITHUB_TOKEN` secret instead.
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
