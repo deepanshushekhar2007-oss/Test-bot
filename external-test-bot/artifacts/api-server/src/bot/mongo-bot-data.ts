@@ -17,7 +17,7 @@ const DEFAULT_DATA: BotData = {
 export async function loadBotData(): Promise<BotData> {
   try {
     const col = await getCollection("bot_data");
-    const doc = await col.findOne({ _id: "main" });
+    const doc = await col.findOne({ _id: "main" as any });
     if (doc) {
       return {
         subscriptionMode: doc.subscriptionMode ?? false,
@@ -36,7 +36,7 @@ export async function saveBotData(data: BotData): Promise<void> {
   try {
     const col = await getCollection("bot_data");
     await col.updateOne(
-      { _id: "main" },
+      { _id: "main" as any },
       {
         $set: {
           subscriptionMode: data.subscriptionMode,
@@ -57,7 +57,7 @@ export async function trackUser(userId: number): Promise<void> {
   try {
     const col = await getCollection("bot_data");
     await col.updateOne(
-      { _id: "main" },
+      { _id: "main" as any },
       { $addToSet: { totalUsers: userId }, $setOnInsert: { subscriptionMode: false, accessList: {}, bannedUsers: [] } },
       { upsert: true }
     );
