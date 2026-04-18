@@ -20,45 +20,10 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-async function initializeOptionalStorage(): Promise<void> {
-  if (!process.env["MONGODB_URI"]) {
-    logger.warn("MONGODB_URI is not configured; starting Telegram bot without persisted WhatsApp sessions");
-    return;
-  }
-
-  try {
-    await getMongoDb();
-    logger.info("MongoDB connected successfully");
-    await restoreWhatsAppSessions();
-  } catch (err) {
-    logger.error({ err }, "MongoDB/session restore failed; continuing with Telegram bot startup");
-  }
-}
-
-function startKeepAlive(): void {
-  const renderUrl = process.env["RENDER_EXTERNAL_URL"];
-  if (!renderUrl) return;
-
-  const pingUrl = `${renderUrl}/api/healthz`;
-  logger.info({ pingUrl }, "Starting keep-alive pings");
-  setInterval(() => {
-    const client = pingUrl.startsWith("https") ? https : http;
-    client.get(pingUrl, (res) => {
-      logger.info({ statusCode: res.statusCode }, "Keep-alive ping complete");
-    }).on("error", (err) => {
-      logger.error({ err }, "Keep-alive ping failed");
-    });
-  }, 10 * 60 * 1000);
-}
-
-async function shutdown(signal: string): Promise<void> {
-  logger.info({ signal }, "Shutdown signal received");
-  await closeMongoDb();
-  process.exit(0);
-}
-
-async function main(): Promise<void> {
-  await initializeOptionalStorage();
+async function main() {
+  await getMongoDb();
+  console.log("[INIT] MongoDB connected successfully");
+  await restoreWhatsAppSessions();
 
   app.listen(port, (err) => {
     if (err) {
@@ -67,16 +32,38 @@ async function main(): Promise<void> {
     }
 
     logger.info({ port }, "Server listening");
-    startKeepAlive();
+
+    const renderUrl = process.env["RENDER_EXTERNAL_URL"];
+    if (renderUrl) {
+      const pingUrl = `${renderUrl}/api/healthz`;
+      console.log(`[KEEP-ALIVE] Will ping ${pingUrl} every 10 minutes`);
+      setInterval(() => {
+        const client = pingUrl.startsWith("https") ? https : http;
+        client.get(pingUrl, (res) => {
+          console.log(`[KEEP-ALIVE] Ping status: ${res.statusCode}`);
+        }).on("error", (err) => {
+          console.error(`[KEEP-ALIVE] Ping failed: ${err.message}`);
+        });
+      }, 10 * 60 * 1000);
+    }
   });
 
   startBot();
 }
 
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", async () => {
+  console.log("[SHUTDOWN] SIGTERM received, closing MongoDB...");
+  await closeMongoDb();
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  console.log("[SHUTDOWN] SIGINT received, closing MongoDB...");
+  await closeMongoDb();
+  process.exit(0);
+});
 
 main().catch((err) => {
-  logger.error({ err }, "Failed to start");
+  console.error("[INIT] Failed to start:", err);
   process.exit(1);
 });
