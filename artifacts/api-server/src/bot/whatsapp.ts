@@ -10,6 +10,17 @@ import { useMongoDBAuthState, clearMongoSession, listStoredWhatsAppSessions } fr
 
 const logger = pino({ level: "silent" });
 
+// Memory optimization: cache Baileys version so it is fetched only ONCE
+// instead of on every socket creation and reconnect
+let _cachedVersion: number[] | null = null;
+async function getCachedBaileysVersion(): Promise<number[]> {
+  if (!_cachedVersion) {
+    const result = await fetchLatestBaileysVersion();
+    _cachedVersion = result.version;
+  }
+  return _cachedVersion;
+}
+
 let socketGenCounter = 0;
 
 interface WhatsAppSession {
@@ -74,7 +85,7 @@ async function createSocket(
     saveCreds = fresh.saveCreds;
   }
 
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await getCachedBaileysVersion();
   console.log(`[WA][${userId}] Creating socket gen=${myGenId} version=${version.join(".")} registered=${state.creds.registered}`);
 
   const sock = makeWASocket({
@@ -95,6 +106,7 @@ async function createSocket(
     syncFullHistory: false,
     markOnlineOnConnect: false,
     retryRequestDelayMs: 250,
+    getMessage: async () => undefined, // No in-memory message buffering
   });
 
   session.socket = sock;
@@ -439,8 +451,13 @@ export async function restoreWhatsAppSessions(): Promise<void> {
   const storedSessions = await listStoredWhatsAppSessions();
   console.log(`[WA][RESTORE] Found ${storedSessions.length} saved WhatsApp session(s)`);
 
-  for (const stored of storedSessions) {
+  for (let _i = 0; _i < storedSessions.length; _i++) {
+    const stored = storedSessions[_i];
     if (sessions.has(stored.userId)) continue;
+    if (_i > 0) {
+      // Memory optimization: stagger restores to avoid RAM spike
+      await new Promise((r) => setTimeout(r, 3000));
+    }
 
     const session: WhatsAppSession = {
       socket: null,
@@ -1209,4 +1226,9 @@ export function isAutoConnected(userId: string): boolean {
 
 export function getAutoConnectedNumber(userId: string): string | null {
   return getConnectedWhatsAppNumber(getAutoUserId(userId));
+}
+
+// Returns all currently active session user IDs (used by cleanup to avoid deleting live sessions)
+export function getActiveSessionUserIds(): Set<string> {
+  return new Set(sessions.keys());
 }
