@@ -203,3 +203,161 @@ export async function clearMongoSession(userId: string): Promise<void> {
   await keysCollection.deleteMany({ userId });
   console.log(`[MongoDB] Cleared session for user: ${userId}`);
 }
+
+/**
+ * Auto-cleanup: Delete stale sessions from MongoDB.
+ *
+ * Rules:
+ * 1. Sessions not updated in `staleAfterDays` days (default 7) are deleted.
+ * 2. Sessions that were NEVER fully paired (registered=false) and older than 1 day are deleted.
+ * 3. Orphaned wa_keys (no matching wa_creds) are also cleaned up.
+ * 4. Sessions in `activeUserIds` are NEVER deleted even if stale.
+ *
+ * Returns a summary of what was deleted.
+ */
+export async function cleanupStaleSessions(
+  activeUserIds: Set<string> = new Set(),
+  staleAfterDays = 7
+): Promise<{ deletedSessions: number; deletedKeys: number; deletedUnpaired: number }> {
+  const credsCollection = await getCollection("wa_creds");
+  const keysCollection = await getCollection("wa_keys");
+
+  const now = new Date();
+  const staleDate = new Date(now.getTime() - staleAfterDays * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000);
+
+  let deletedSessions = 0;
+  let deletedKeys = 0;
+  let deletedUnpaired = 0;
+
+  // Fetch all creds documents
+  const allDocs = await credsCollection
+    .find({}, { projection: { _id: 1, userId: 1, creds: 1, updatedAt: 1 } })
+    .toArray();
+
+  const toDelete: string[] = [];
+
+  for (const doc of allDocs) {
+    const userId = String(doc.userId || doc._id || "");
+    if (!userId) continue;
+
+    // Never delete currently active sessions
+    if (activeUserIds.has(userId)) continue;
+
+    const updatedAt: Date | undefined = doc.updatedAt instanceof Date
+      ? doc.updatedAt
+      : doc.updatedAt
+        ? new Date(doc.updatedAt)
+        : undefined;
+
+    let isRegistered = false;
+    try {
+      const creds = deserialize(doc.creds);
+      isRegistered = creds?.registered === true;
+    } catch {
+      // Corrupt doc — mark for deletion
+      toDelete.push(userId);
+      continue;
+    }
+
+    // Rule 1: Registered session not updated in staleAfterDays days
+    if (isRegistered && updatedAt && updatedAt < staleDate) {
+      console.log(`[CLEANUP] Stale session userId=${userId} lastSeen=${updatedAt.toISOString()}`);
+      toDelete.push(userId);
+      continue;
+    }
+
+    // Rule 2: Never registered (incomplete pairing) older than 1 day
+    if (!isRegistered && updatedAt && updatedAt < oneDayAgo) {
+      console.log(`[CLEANUP] Unpaired session userId=${userId} createdAt=${updatedAt.toISOString()}`);
+      toDelete.push(userId);
+      deletedUnpaired++;
+      continue;
+    }
+
+    // Rule 3: No updatedAt field and session is very old (fallback)
+    if (!updatedAt && !isRegistered) {
+      console.log(`[CLEANUP] Unknown-age unpaired session userId=${userId}`);
+      toDelete.push(userId);
+      deletedUnpaired++;
+    }
+  }
+
+  // Delete stale creds
+  for (const userId of toDelete) {
+    await credsCollection.deleteOne({ _id: userId as any });
+    const keysResult = await keysCollection.deleteMany({ userId });
+    deletedKeys += keysResult.deletedCount ?? 0;
+    deletedSessions++;
+  }
+
+  // Rule 4: Clean up orphaned wa_keys (userId not in any wa_creds)
+  const remainingUserIds = allDocs
+    .map((d) => String(d.userId || d._id || ""))
+    .filter((id) => id && !toDelete.includes(id));
+
+  let orphanResult;
+  if (remainingUserIds.length > 0) {
+    // Delete keys whose userId is not in remaining sessions
+    orphanResult = await keysCollection.deleteMany({
+      userId: { $nin: remainingUserIds },
+    });
+  } else {
+    // No sessions remain at all — delete ALL keys safely
+    orphanResult = await keysCollection.deleteMany({});
+  }
+  const orphanCount = orphanResult.deletedCount ?? 0;
+  if (orphanCount > 0) {
+    console.log(`[CLEANUP] Deleted ${orphanCount} orphaned wa_keys`);
+    deletedKeys += orphanCount;
+  }
+
+  console.log(
+    `[CLEANUP] Done — deleted ${deletedSessions} stale sessions (${deletedUnpaired} unpaired), ${deletedKeys} keys`
+  );
+
+  return { deletedSessions, deletedKeys, deletedUnpaired };
+}
+
+/**
+ * Get session info for all stored sessions — used by admin Telegram command.
+ */
+export async function getSessionStats(): Promise<Array<{
+  userId: string;
+  phoneNumber: string;
+  registered: boolean;
+  lastSeen: string;
+}>> {
+  const credsCollection = await getCollection("wa_creds");
+  const docs = await credsCollection
+    .find({}, { projection: { _id: 1, userId: 1, creds: 1, updatedAt: 1 } })
+    .toArray();
+
+  const result = [];
+  for (const doc of docs) {
+    const userId = String(doc.userId || doc._id || "");
+    if (!userId) continue;
+
+    let phoneNumber = "";
+    let registered = false;
+    try {
+      const creds = deserialize(doc.creds);
+      const rawId = creds?.me?.id || creds?.me?.lid || "";
+      const digits = String(rawId).split(":")[0].split("@")[0].replace(/[^0-9]/g, "");
+      phoneNumber = digits ? `+${digits}` : "unknown";
+      registered = creds?.registered === true;
+    } catch {
+      phoneNumber = "corrupt";
+    }
+
+    const updatedAt = doc.updatedAt
+      ? new Date(doc.updatedAt).toLocaleDateString("en-IN", {
+          day: "2-digit", month: "short", year: "numeric",
+        })
+      : "unknown";
+
+    result.push({ userId, phoneNumber, registered, lastSeen: updatedAt });
+  }
+
+  return result;
+}
