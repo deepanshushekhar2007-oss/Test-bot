@@ -1,0 +1,171 @@
+import { sc } from "./font";
+import { CompletedTicket } from "./types";
+
+const DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+const TOTAL_STEPS = 6;
+
+/** Build a ▓░░░░░ style progress bar */
+function progressBar(step: number): string {
+  return "▓".repeat(step) + "░".repeat(TOTAL_STEPS - step);
+}
+
+/** Format date nicely */
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// ── Group message when /ticket is used ──────────────────────────────────────
+
+export function formatGroupTicketRequest(): string {
+  return [
+    DIVIDER,
+    `🎫  ${sc("Ticket System")}`,
+    DIVIDER,
+    "",
+    sc("A new deal ticket has been requested in this group."),
+    "",
+    sc("Click the button below to fill in the ticket details"),
+    sc("in our private chat. It only takes a minute!"),
+    "",
+    `⚡ ${sc("Secure")}  ·  ${sc("Fast")}  ·  ${sc("Admin-Verified")}`,
+    DIVIDER,
+  ].join("\n");
+}
+
+// ── Step prompts ─────────────────────────────────────────────────────────────
+
+const STEP_QUESTIONS: Record<number, { icon: string; question: string; hint: string }> = {
+  1: {
+    icon: "📦",
+    question: sc("What item / commodity is being dealt?"),
+    hint: `${sc("Example")}: Gold, BTC, USD, Property, USDT...`,
+  },
+  2: {
+    icon: "🛒",
+    question: sc("Who is the BUYER?"),
+    hint: sc("Enter the buyer's name or @username."),
+  },
+  3: {
+    icon: "💰",
+    question: sc("Who is the SELLER?"),
+    hint: sc("Enter the seller's name or @username."),
+  },
+  4: {
+    icon: "💵",
+    question: sc("What is the deal amount & currency?"),
+    hint:
+      `${sc("Format")}: 5000 INR  |  100 USDT  |  0.5 BTC\n` +
+      sc("Always include the currency after the amount."),
+  },
+  5: {
+    icon: "📈",
+    question: sc("What is the exchange rate?"),
+    hint: `${sc("Example")}: 1 USD = 84 INR  |  1 BTC = 65000 USD  |  N/A`,
+  },
+  6: {
+    icon: "👤",
+    question: sc("Who is the deal admin / facilitator?"),
+    hint: sc("Enter the @username of the person managing this deal."),
+  },
+};
+
+export function formatStepPrompt(step: number, ticketId: string): string {
+  const bar = progressBar(step);
+  const q = STEP_QUESTIONS[step];
+
+  return [
+    DIVIDER,
+    `🎫 ${sc("Ticket")} #${ticketId}`,
+    "",
+    `📊 ${sc("Step")} ${step} ${sc("of")} ${TOTAL_STEPS}   [ ${bar} ]`,
+    DIVIDER,
+    "",
+    `${q.icon}  ${q.question}`,
+    "",
+    q.hint,
+    "",
+    DIVIDER,
+  ].join("\n");
+}
+
+// ── Full ticket summary (sent to user after form is complete) ────────────────
+
+export function formatTicketSummary(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `🎫  ${sc("Deal Ticket")}`,
+    DIVIDER,
+    `   ${sc("Ticket Number")}  :  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    `📦  ${sc("Item")}          :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}         :  ${t.buyer}`,
+    `💰  ${sc("Seller")}        :  ${t.seller}`,
+    `💵  ${sc("Amount")}        :  ${t.amount} ${t.currency}`,
+    `📈  ${sc("Exchange Rate")} :  ${t.exchangeRate}`,
+    `👤  ${sc("Deal Admin")}    :  ${t.facilitator}`,
+    `📅  ${sc("Date")}          :  ${fmtDate(t.createdAt)}`,
+    `🔄  ${sc("Status")}        :  🟡 ${sc("Pending Admin Approval")}`,
+    "",
+    DIVIDER,
+    "",
+    `⏳  ${sc("Your ticket has been submitted to the admin.")}`,
+    `    ${sc("You will be notified once the deal is approved.")}`,
+    "",
+    DIVIDER,
+  ].join("\n");
+}
+
+// ── Admin notification ────────────────────────────────────────────────────────
+
+export function formatAdminNotification(t: CompletedTicket): string {
+  const userTag = t.username ? `@${t.username}` : t.firstName;
+
+  return [
+    DIVIDER,
+    `🚨  ${sc("New Ticket — Approval Required")}`,
+    DIVIDER,
+    `   ${sc("Ticket Number")}  :  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    `📦  ${sc("Item")}          :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}         :  ${t.buyer}`,
+    `💰  ${sc("Seller")}        :  ${t.seller}`,
+    `💵  ${sc("Amount")}        :  ${t.amount} ${t.currency}`,
+    `📈  ${sc("Exchange Rate")} :  ${t.exchangeRate}`,
+    `👤  ${sc("Deal Admin")}    :  ${t.facilitator}`,
+    `📅  ${sc("Date")}          :  ${fmtDate(t.createdAt)}`,
+    "",
+    `${sc("Submitted by")}  :  ${userTag}`,
+    "",
+    DIVIDER,
+    "",
+    sc("Review the details and click Approve to verify the deal."),
+    DIVIDER,
+  ].join("\n");
+}
+
+// ── Group approval message (posted in group when admin approves) ─────────────
+
+export function formatGroupApproval(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `✅  ${sc("Ticket Closed")}  —  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    `🎉  ${sc("Deal successfully verified & approved by admin!")}`,
+    `    ${sc("Both parties have been confirmed.")}`,
+    "",
+    `📦  ${sc("Item")}   :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}  :  ${t.buyer}`,
+    `💰  ${sc("Seller")} :  ${t.seller}`,
+    `💵  ${sc("Amount")} :  ${t.amount} ${t.currency}`,
+    "",
+    `✔️   ${sc("Verified by Admin")}   ·   🔒 ${sc("Ticket Closed")}`,
+    DIVIDER,
+  ].join("\n");
+}

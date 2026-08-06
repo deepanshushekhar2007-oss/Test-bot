@@ -1,0 +1,341 @@
+import { Bot, InlineKeyboard } from "grammy";
+import { sc } from "./font";
+import type { SessionData, CompletedTicket } from "./types";
+import {
+  formatGroupTicketRequest,
+  formatStepPrompt,
+  formatTicketSummary,
+  formatAdminNotification,
+  formatGroupApproval,
+} from "./messages";
+
+// ── Environment ───────────────────────────────────────────────────────────────
+
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ADMIN_ID_RAW = process.env.ADMIN_TELEGRAM_ID;
+
+if (!BOT_TOKEN) {
+  console.error("❌  TELEGRAM_BOT_TOKEN is not set");
+  process.exit(1);
+}
+if (!ADMIN_ID_RAW) {
+  console.error("❌  ADMIN_TELEGRAM_ID is not set");
+  process.exit(1);
+}
+
+const ADMIN_ID = parseInt(ADMIN_ID_RAW, 10);
+if (isNaN(ADMIN_ID)) {
+  console.error("❌  ADMIN_TELEGRAM_ID must be a numeric Telegram user ID");
+  process.exit(1);
+}
+
+// ── Bot setup ─────────────────────────────────────────────────────────────────
+
+const bot = new Bot(BOT_TOKEN);
+
+let botUsername = "";
+let ticketCounter = 1;
+
+/** Active form sessions: userId → current session state */
+const sessions = new Map<number, SessionData>();
+
+/** Completed tickets waiting for admin approval: ticketId → ticket */
+const completedTickets = new Map<string, CompletedTicket>();
+
+function generateTicketId(): string {
+  return String(ticketCounter++).padStart(6, "0");
+}
+
+// Fetch bot username on startup for deep-link construction
+bot.api
+  .getMe()
+  .then((me) => {
+    botUsername = me.username ?? "";
+    console.log(`✅  Bot @${botUsername} connected`);
+    console.log(`👑  Admin ID: ${ADMIN_ID}`);
+  })
+  .catch((err: Error) => {
+    console.error("Failed to connect to Telegram:", err.message);
+    process.exit(1);
+  });
+
+// ── /ticket — Group command ───────────────────────────────────────────────────
+
+bot.command("ticket", async (ctx) => {
+  const chat = ctx.chat;
+
+  if (!chat || chat.type === "private") {
+    await ctx.reply(
+      `⚠️  ${sc("Please use this command inside a group!")}`
+    );
+    return;
+  }
+
+  if (!botUsername) {
+    await ctx.reply(sc("Bot is still starting up. Please try again shortly."));
+    return;
+  }
+
+  const groupId = chat.id;
+  const keyboard = new InlineKeyboard().url(
+    `📋  ${sc("Open Ticket Form")}`,
+    `https://t.me/${botUsername}?start=tkt_${groupId}`
+  );
+
+  await ctx.reply(formatGroupTicketRequest(), { reply_markup: keyboard });
+});
+
+// ── /start — DM: begin form ───────────────────────────────────────────────────
+
+bot.command("start", async (ctx) => {
+  if (ctx.chat.type !== "private") return;
+
+  const payload = ctx.match ?? "";
+
+  // Regular /start with no payload
+  if (!payload.startsWith("tkt_")) {
+    await ctx.reply(
+      [
+        `👋  ${sc("Welcome!")}`,
+        "",
+        sc("Use /ticket in any group to open a deal ticket."),
+        sc("I will walk you through a short form in our private chat."),
+      ].join("\n")
+    );
+    return;
+  }
+
+  // Deep-link start from group button
+  const groupIdStr = payload.slice(4); // strip "tkt_"
+  const groupId = parseInt(groupIdStr, 10);
+  if (isNaN(groupId)) {
+    await ctx.reply(
+      `⚠️  ${sc("Invalid ticket link. Please use /ticket in a group and try again.")}`
+    );
+    return;
+  }
+
+  const userId = ctx.from!.id;
+
+  // Prevent duplicate sessions
+  if (sessions.has(userId)) {
+    await ctx.reply(
+      `⚠️  ${sc("You already have an active ticket form.")}\n` +
+        sc("Please complete it, or type /cancel to start over.")
+    );
+    return;
+  }
+
+  const ticketId = generateTicketId();
+  const session: SessionData = {
+    step: 1,
+    groupId,
+    ticketId,
+    userId,
+    firstName: ctx.from!.first_name,
+    username: ctx.from!.username,
+    commodity: "",
+    buyer: "",
+    seller: "",
+    amount: "",
+    currency: "",
+    exchangeRate: "",
+    facilitator: "",
+    createdAt: new Date(),
+  };
+
+  sessions.set(userId, session);
+  await ctx.reply(formatStepPrompt(1, ticketId));
+});
+
+// ── /cancel — Abort active form ───────────────────────────────────────────────
+
+bot.command("cancel", async (ctx) => {
+  if (ctx.chat.type !== "private") return;
+  const userId = ctx.from!.id;
+
+  if (sessions.delete(userId)) {
+    await ctx.reply(
+      `❌  ${sc("Ticket form cancelled.")}\n` +
+        sc("Use /ticket in a group to start a new one.")
+    );
+  } else {
+    await ctx.reply(sc("No active ticket form to cancel."));
+  }
+});
+
+// ── Text messages — Multi-step form handler ───────────────────────────────────
+
+bot.on("message:text", async (ctx) => {
+  if (ctx.chat.type !== "private") return;
+
+  const userId = ctx.from!.id;
+  const session = sessions.get(userId);
+  if (!session) return; // No active form; ignore
+
+  const text = ctx.message.text.trim();
+
+  // Let /cancel pass through to its own handler
+  if (text.startsWith("/")) return;
+
+  if (!text) {
+    await ctx.reply(`⚠️  ${sc("Please enter a valid answer.")}`);
+    return;
+  }
+
+  switch (session.step) {
+    // Step 1 — Commodity / Item
+    case 1:
+      session.commodity = text;
+      session.step = 2;
+      await ctx.reply(formatStepPrompt(2, session.ticketId));
+      break;
+
+    // Step 2 — Buyer
+    case 2:
+      session.buyer = text;
+      session.step = 3;
+      await ctx.reply(formatStepPrompt(3, session.ticketId));
+      break;
+
+    // Step 3 — Seller
+    case 3:
+      session.seller = text;
+      session.step = 4;
+      await ctx.reply(formatStepPrompt(4, session.ticketId));
+      break;
+
+    // Step 4 — Amount + Currency (e.g. "5000 INR" or "0.5 BTC")
+    case 4: {
+      const parts = text.split(/\s+/);
+      if (parts.length < 2) {
+        await ctx.reply(
+          `⚠️  ${sc("Please include the currency after the amount.")}\n\n` +
+            `${sc("Format")}: 5000 INR  |  100 USDT  |  0.5 BTC`
+        );
+        return; // Don't advance step
+      }
+      session.amount = parts[0];
+      session.currency = parts.slice(1).join(" ").toUpperCase();
+      session.step = 5;
+      await ctx.reply(formatStepPrompt(5, session.ticketId));
+      break;
+    }
+
+    // Step 5 — Exchange Rate
+    case 5:
+      session.exchangeRate = text;
+      session.step = 6;
+      await ctx.reply(formatStepPrompt(6, session.ticketId));
+      break;
+
+    // Step 6 — Deal Admin / Facilitator (final step)
+    case 6: {
+      session.facilitator = text;
+      sessions.delete(userId); // Form complete; remove session
+
+      const completed: CompletedTicket = { ...session, facilitator: text };
+      completedTickets.set(session.ticketId, completed);
+
+      // 1. Show full ticket summary to the user
+      await ctx.reply(formatTicketSummary(completed));
+
+      // 2. Notify admin with Approve button
+      try {
+        const adminKeyboard = new InlineKeyboard().text(
+          `✅  ${sc("Approve Deal")}`,
+          `approve_${session.ticketId}`
+        );
+        await bot.api.sendMessage(
+          ADMIN_ID,
+          formatAdminNotification(completed),
+          { reply_markup: adminKeyboard }
+        );
+      } catch (err) {
+        console.error("Failed to notify admin:", (err as Error).message);
+      }
+      return; // Session already deleted; skip the set below
+    }
+  }
+
+  // Persist updated session
+  sessions.set(userId, session);
+});
+
+// ── Callback queries — Admin approval ─────────────────────────────────────────
+
+bot.on("callback_query:data", async (ctx) => {
+  const data = ctx.callbackQuery.data;
+
+  if (!data.startsWith("approve_")) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  // Only the designated admin can approve
+  if (ctx.from.id !== ADMIN_ID) {
+    await ctx.answerCallbackQuery({
+      text: "⛔  You are not authorized to approve tickets.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  const ticketId = data.slice(8); // strip "approve_"
+  const ticket = completedTickets.get(ticketId);
+
+  if (!ticket) {
+    await ctx.answerCallbackQuery({
+      text: "⚠️  Ticket not found or already processed.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  // Post closure message in the originating group
+  try {
+    await bot.api.sendMessage(ticket.groupId, formatGroupApproval(ticket));
+  } catch (err) {
+    console.error("Failed to post approval to group:", (err as Error).message);
+    await ctx.answerCallbackQuery({
+      text: "❌  Could not post to group. Bot may have been removed.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  // Mark admin message as approved (remove button)
+  const approvedMsg =
+    formatAdminNotification(ticket) +
+    "\n\n" +
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+    `✅  ${sc("APPROVED — DEAL VERIFIED & CLOSED")}\n` +
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+
+  await ctx.editMessageText(approvedMsg, { reply_markup: undefined });
+
+  completedTickets.delete(ticketId);
+  await ctx.answerCallbackQuery({
+    text: "✅  Deal approved! The group has been notified.",
+  });
+});
+
+// ── Error handler ─────────────────────────────────────────────────────────────
+
+bot.catch((err) => {
+  const cause = err.error;
+  if (cause instanceof Error) {
+    console.error("Bot error:", cause.message);
+  } else {
+    console.error("Bot error:", err);
+  }
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+console.log("🚀  Starting Telegram bot...");
+bot.start({
+  onStart: (info) => {
+    console.log(`✅  @${info.username} is live and listening`);
+  },
+});

@@ -1,44 +1,45 @@
-# [Project name]
+# Telegram Deal Ticket Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` in a group, fill a 6-step form in DM, and the admin approves the deal — notifying the group when complete.
 
 ## Run & Operate
 
+- `pnpm --filter @workspace/telegram-bot run dev` — run the Telegram bot (uses long polling)
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Telegram: grammy v1 (long polling)
+- Bot state: in-memory Maps (sessions + completed tickets)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/telegram-bot/src/index.ts` — all bot handlers (commands, form steps, admin approval)
+- `artifacts/telegram-bot/src/messages.ts` — all message templates (small-caps Unicode font)
+- `artifacts/telegram-bot/src/font.ts` — `sc()` small-caps converter
+- `artifacts/telegram-bot/src/types.ts` — `SessionData` and `CompletedTicket` interfaces
 
-## Architecture decisions
+## Bot Flow
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
+1. User sends `/ticket` in group → bot posts message with "Open Ticket Form" URL button
+2. Button opens `t.me/BOT?start=tkt_GROUPID` → DM session starts
+3. 6-step form in DM: Item → Buyer → Seller → Amount+Currency → Exchange Rate → Deal Admin
+4. Ticket summary sent to user; admin receives notification with **Approve** button
+5. Admin clicks Approve → group gets closure message with deal details
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- All bot messages in small-caps Unicode font (ᴀʙᴄ style)
+- Messages in English
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_ID` must be set as Replit Secrets
+- `ADMIN_TELEGRAM_ID` must be the numeric user ID (get it from @userinfobot), not a username
+- Bot must be added to the group as a member (doesn't need admin rights to post)
+- In-memory state: sessions and tickets reset on bot restart
 
 ## Pointers
 
