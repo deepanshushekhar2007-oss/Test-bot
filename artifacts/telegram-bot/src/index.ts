@@ -11,6 +11,7 @@ import {
   formatGroupScamReport,
   formatGroupCancellation,
   formatSharedTicket,
+  formatDealCompleteRolePrompt,
   formatPartyConfirmation,
 } from "./messages";
 
@@ -67,7 +68,7 @@ const pendingOpenMessages = new Map<string, number>();
 /** Role selected by a buyer/seller before pressing the final confirmation button. */
 const roleSelections = new Map<
   number,
-  { ticketId: string; role: "buyer" | "seller" }
+  { ticketId: string; role: "buyer" | "seller"; action: "share" | "complete" }
 >();
 
 function generateTicketId(): string {
@@ -135,23 +136,30 @@ function actionConfirmationKeyboard(
     .text(`↩️  ${sc("Go Back")}`, `back_ticket_${ticketId}`);
 }
 
-function roleKeyboard(ticketId: string): InlineKeyboard {
-  return new InlineKeyboard()
-    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
-    .row()
-    .text(`🛒  ${sc("I am the Buyer")}`, `role_buyer_${ticketId}`)
-    .row()
-    .text(`💰  ${sc("I am the Seller")}`, `role_seller_${ticketId}`);
-}
-
-function roleConfirmationKeyboard(
+function roleKeyboard(
   ticketId: string,
-  role: "buyer" | "seller"
+  action: "share" | "complete" = "share"
 ): InlineKeyboard {
   return new InlineKeyboard()
     .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
     .row()
-    .text(`✅  ${sc("Confirm")} ${sc(role)}`, `confirm_role_${role}_${ticketId}`);
+    .text(`🛒  ${sc("I am the Buyer")}`, `role_${action}_buyer_${ticketId}`)
+    .row()
+    .text(`💰  ${sc("I am the Seller")}`, `role_${action}_seller_${ticketId}`);
+}
+
+function roleConfirmationKeyboard(
+  ticketId: string,
+  role: "buyer" | "seller",
+  action: "share" | "complete"
+): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
+    .row()
+    .text(
+      `✅  ${sc("Confirm")} ${sc(role)}`,
+      `confirm_role_${action}_${role}_${ticketId}`
+    );
 }
 
 function shareOnlyKeyboard(ticketId: string): InlineKeyboard {
@@ -263,7 +271,7 @@ bot.command("start", async (ctx) => {
       return;
     }
     await ctx.reply(formatSharedTicket(ticket), {
-      reply_markup: roleKeyboard(ticket.ticketId),
+      reply_markup: roleKeyboard(ticket.ticketId, "share"),
     });
     return;
   }
@@ -486,15 +494,16 @@ bot.on("callback_query:data", async (ctx) => {
     return;
   }
 
-  const roleMatch = data.match(/^role_(buyer|seller)_(.+)$/);
+  const roleMatch = data.match(/^role_(share|complete)_(buyer|seller)_(.+)$/);
   if (roleMatch) {
-    const ticketId = roleMatch[2];
+    const action = roleMatch[1] as "share" | "complete";
+    const role = roleMatch[2] as "buyer" | "seller";
+    const ticketId = roleMatch[3];
     const ticket = completedTickets.get(ticketId);
     if (!ticket) {
       await ctx.answerCallbackQuery({ text: "⚠️  Ticket is closed.", show_alert: true });
       return;
     }
-    const role = roleMatch[1] as "buyer" | "seller";
     const claimedId = role === "buyer" ? ticket.buyerUserId : ticket.sellerUserId;
     if (claimedId && claimedId !== ctx.from.id) {
       await ctx.answerCallbackQuery({
@@ -503,21 +512,30 @@ bot.on("callback_query:data", async (ctx) => {
       });
       return;
     }
-    roleSelections.set(ctx.from.id, { ticketId, role });
+    roleSelections.set(ctx.from.id, { ticketId, role, action });
     await ctx.editMessageText(formatPartyConfirmation(ticket, role), {
-      reply_markup: roleConfirmationKeyboard(ticketId, role),
+      reply_markup: roleConfirmationKeyboard(ticketId, role, action),
     });
     await ctx.answerCallbackQuery();
     return;
   }
 
-  const roleConfirmMatch = data.match(/^confirm_role_(buyer|seller)_(.+)$/);
+  const roleConfirmMatch = data.match(
+    /^confirm_role_(share|complete)_(buyer|seller)_(.+)$/
+  );
   if (roleConfirmMatch) {
-    const ticketId = roleConfirmMatch[2];
+    const action = roleConfirmMatch[1] as "share" | "complete";
+    const role = roleConfirmMatch[2] as "buyer" | "seller";
+    const ticketId = roleConfirmMatch[3];
     const ticket = completedTickets.get(ticketId);
-    const role = roleConfirmMatch[1] as "buyer" | "seller";
     const selection = roleSelections.get(ctx.from.id);
-    if (!ticket || !selection || selection.ticketId !== ticketId || selection.role !== role) {
+    if (
+      !ticket ||
+      !selection ||
+      selection.ticketId !== ticketId ||
+      selection.role !== role ||
+      selection.action !== action
+    ) {
       await ctx.answerCallbackQuery({
         text: "⚠️  Please select your role again.",
         show_alert: true,
@@ -538,6 +556,9 @@ bot.on("callback_query:data", async (ctx) => {
     } else {
       ticket.sellerUserId = ctx.from.id;
       ticket.sellerConfirmed = true;
+    }
+    if (action === "complete") {
+      ticket.creatorCompleteConfirmed = true;
     }
     roleSelections.delete(ctx.from.id);
     await ctx.editMessageText(
@@ -582,6 +603,14 @@ bot.on("callback_query:data", async (ctx) => {
       return;
     }
     const action = actionMatch[1] as "complete" | "scam" | "cancel";
+    if (action === "complete") {
+      await ctx.editMessageText(formatDealCompleteRolePrompt(ticket), {
+        reply_markup: roleKeyboard(ticketId, "complete"),
+      });
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
     await ctx.editMessageText(
       formatTicketSummary(ticket) +
         "\n\n" +
@@ -604,24 +633,6 @@ bot.on("callback_query:data", async (ctx) => {
       return;
     }
     const action = confirmMatch[1] as "complete" | "scam" | "cancel";
-    if (action === "complete") {
-      ticket.creatorCompleteConfirmed = true;
-      try {
-        await notifyAdminIfReady(ticket);
-      } catch (err) {
-        console.error("Failed to notify admin:", (err as Error).message);
-      }
-      await ctx.editMessageText(
-        formatTicketSummary(ticket) +
-          "\n\n" +
-          `⏳  ${sc("DEAL COMPLETE CONFIRMED.")}\n` +
-          `    ${sc("Waiting for buyer and seller confirmation.")}`,
-        { reply_markup: shareOnlyKeyboard(ticketId) }
-      );
-      await ctx.answerCallbackQuery({ text: "✅  Deal completion confirmed." });
-      return;
-    }
-
     const groupMessage = action === "scam"
       ? await bot.api.sendMessage(ticket.groupId, formatGroupScamReport(ticket))
       : await bot.api.sendMessage(ticket.groupId, formatGroupCancellation(ticket));

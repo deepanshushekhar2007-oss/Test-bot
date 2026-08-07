@@ -159,6 +159,27 @@ export function formatSharedTicket(t: CompletedTicket): string {
   ].join("\n");
 }
 
+export function formatDealCompleteRolePrompt(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `✅  ${sc("Deal Complete Confirmation")}`,
+    DIVIDER,
+    `   ${sc("Ticket Number")}  :  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    sc("Before confirming the deal is complete, select your role."),
+    sc("Choose the same role you represent in this ticket."),
+    "",
+    `📦  ${sc("Item")}          :  ${t.commodity}`,
+    `💵  ${sc("Amount")}        :  ${t.amount} ${t.currency}`,
+    `🛒  ${sc("Buyer")}         :  ${t.buyer}`,
+    `💰  ${sc("Seller")}        :  ${t.seller}`,
+    "",
+    `⚠️  ${sc("Select Buyer or Seller, then confirm.")}`,
+    DIVIDER,
+  ].join("\n");
+}
+
 export function formatPartyConfirmation(
   t: CompletedTicket,
   role: "buyer" | "seller"
