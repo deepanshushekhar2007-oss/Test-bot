@@ -26,8 +26,11 @@ A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` i
 1. User sends `/ticket` in group → bot posts message with "Open Ticket Form" URL button
 2. Button opens `t.me/BOT?start=tkt_GROUPID` → DM session starts
 3. 6-step form in DM: Item → Buyer → Seller → Amount+Currency → Exchange Rate → Deal Admin
-4. Ticket summary sent to user; admin receives notification with **Approve** button
-5. Admin clicks Approve → group gets closure message with deal details
+4. Group prompt disappears when the creator opens the private form
+5. Ticket creator can share the ticket with buyer and seller; each selects their role and confirms
+6. Creator can confirm Complete, report Scam, or Cancel (each has a confirmation step)
+7. Admin receives **Approve** only after creator, buyer, and seller confirmations
+8. Admin clicks Approve → group gets a pinned closure message with deal details
 
 ## User preferences
 
@@ -39,6 +42,7 @@ A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` i
 - `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_ID` must be set as Replit Secrets
 - `ADMIN_TELEGRAM_ID` must be the numeric user ID (get it from @userinfobot), not a username
 - Bot must be added to the group as a member (doesn't need admin rights to post)
+- Bot must be an admin in both required channels to verify membership, and a group admin to pin completed deals and delete prompts
 - In-memory state: sessions and tickets reset on bot restart
 
 ## Pointers

@@ -16,5 +16,10 @@ export interface SessionData {
 }
 
 export interface CompletedTicket extends SessionData {
-  // All form fields are guaranteed filled
+  creatorCompleteConfirmed: boolean;
+  buyerConfirmed: boolean;
+  sellerConfirmed: boolean;
+  buyerUserId?: number;
+  sellerUserId?: number;
+  adminNotified: boolean;
 }

@@ -119,6 +119,50 @@ export function formatTicketSummary(t: CompletedTicket): string {
   ].join("\n");
 }
 
+export function formatSharedTicket(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `🎫  ${sc("Shared Deal Ticket")}`,
+    DIVIDER,
+    `   ${sc("Ticket Number")}  :  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    `📦  ${sc("Item")}          :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}         :  ${t.buyer}`,
+    `💰  ${sc("Seller")}        :  ${t.seller}`,
+    `💵  ${sc("Amount")}        :  ${t.amount} ${t.currency}`,
+    `📈  ${sc("Exchange Rate")} :  ${t.exchangeRate}`,
+    `👤  ${sc("Deal Admin")}    :  ${t.facilitator}`,
+    "",
+    sc("Please choose your role and confirm the ticket details."),
+    DIVIDER,
+  ].join("\n");
+}
+
+export function formatPartyConfirmation(
+  t: CompletedTicket,
+  role: "buyer" | "seller"
+): string {
+  const party = role === "buyer" ? sc("BUYER") : sc("SELLER");
+  return [
+    DIVIDER,
+    `⚠️  ${sc("Confirm Your Role")}`,
+    DIVIDER,
+    "",
+    `${sc("You are confirming that you are the")} ${party}.`,
+    sc("Please check every ticket detail before confirming."),
+    "",
+    `🎫  ${sc("Ticket")} #${t.ticketId}`,
+    `📦  ${sc("Item")}      :  ${t.commodity}`,
+    `💵  ${sc("Amount")}    :  ${t.amount} ${t.currency}`,
+    `🛒  ${sc("Buyer")}     :  ${t.buyer}`,
+    `💰  ${sc("Seller")}    :  ${t.seller}`,
+    "",
+    `⚠️  ${sc("Confirm only if these details are correct.")}`,
+    DIVIDER,
+  ].join("\n");
+}
+
 // ── Group messages for user-selected outcomes ─────────────────────────────────
 
 export function formatGroupScamReport(t: CompletedTicket): string {
@@ -188,7 +232,7 @@ export function formatAdminNotification(t: CompletedTicket): string {
     "",
     DIVIDER,
     "",
-    sc("Review the details and click Approve to verify the deal."),
+    sc("Both buyer and seller have confirmed. Review and approve the deal."),
     DIVIDER,
   ].join("\n");
 }
@@ -201,7 +245,8 @@ export function formatGroupApproval(t: CompletedTicket): string {
     `✅  ${sc("Ticket Closed")}  —  #${t.ticketId}`,
     DIVIDER,
     "",
-    `🎉  ${sc("Deal successfully verified & approved by admin!")}`,
+    `🎉  ${sc("DEAL SUCCESSFULLY COMPLETED")}`,
+    `    ${sc("Verified & approved by admin.")}`,
     `    ${sc("Both parties have been confirmed.")}`,
     "",
     `📦  ${sc("Item")}   :  ${t.commodity}`,

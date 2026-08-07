@@ -9,6 +9,8 @@ import {
   formatGroupApproval,
   formatGroupScamReport,
   formatGroupCancellation,
+  formatSharedTicket,
+  formatPartyConfirmation,
 } from "./messages";
 
 // ── Environment ───────────────────────────────────────────────────────────────
@@ -31,6 +33,20 @@ if (isNaN(ADMIN_ID)) {
   process.exit(1);
 }
 
+const REQUIRED_CHANNELS = [
+  { chatId: "@Files_Fusion", url: "https://t.me/Files_Fusion" },
+  { chatId: "-1002331025603", url: "https://t.me/+pCvqZhgGTTs3ZmM1" },
+] as const;
+
+const JOIN_TEXT = [
+  `🔐  ${sc("Channel membership required")}`,
+  "",
+  sc("Please join both required channels before using the ticket system."),
+  "",
+  `1. ${sc("Files Fusion")}`,
+  `2. ${sc("Private Verification Channel")}`,
+].join("\n");
+
 // ── Bot setup ─────────────────────────────────────────────────────────────────
 
 const bot = new Bot(BOT_TOKEN);
@@ -44,8 +60,124 @@ const sessions = new Map<number, SessionData>();
 /** Completed tickets waiting for admin approval: ticketId → ticket */
 const completedTickets = new Map<string, CompletedTicket>();
 
+/** Group messages with an open-form link, keyed by group and requesting user. */
+const pendingOpenMessages = new Map<string, number>();
+
+/** Role selected by a buyer/seller before pressing the final confirmation button. */
+const roleSelections = new Map<
+  number,
+  { ticketId: string; role: "buyer" | "seller" }
+>();
+
 function generateTicketId(): string {
   return String(ticketCounter++).padStart(6, "0");
+}
+
+function membershipKeyboard(userId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`1️⃣  ${sc("Join Files Fusion")}`, REQUIRED_CHANNELS[0].url)
+    .row()
+    .url(`2️⃣  ${sc("Join Private Channel")}`, REQUIRED_CHANNELS[1].url)
+    .row()
+    .text(`🔄  ${sc("Verify Membership")}`, `verify_access_${userId}`);
+}
+
+async function isMember(chatId: string, userId: number): Promise<boolean> {
+  try {
+    const member = await bot.api.getChatMember(chatId, userId);
+    return (
+      member.status === "creator" ||
+      member.status === "administrator" ||
+      member.status === "member" ||
+      (member.status === "restricted" && member.is_member)
+    );
+  } catch (err) {
+    console.error(`Membership check failed for ${chatId}:`, (err as Error).message);
+    return false;
+  }
+}
+
+async function hasRequiredMembership(userId: number): Promise<boolean> {
+  const results = await Promise.all(
+    REQUIRED_CHANNELS.map((channel) => isMember(channel.chatId, userId))
+  );
+  return results.every(Boolean);
+}
+
+function shareTicketUrl(ticketId: string): string {
+  const deepLink = `https://t.me/${botUsername}?start=share_${ticketId}`;
+  return `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent(
+    sc("Please confirm your role on this deal ticket.")
+  )}`;
+}
+
+function pendingTicketKeyboard(ticket: CompletedTicket): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticket.ticketId))
+    .row()
+    .text(`✅  ${sc("Deal Complete")}`, `user_complete_${ticket.ticketId}`)
+    .row()
+    .text(`🚨  ${sc("Scam Deal")}`, `user_scam_${ticket.ticketId}`)
+    .row()
+    .text(`❌  ${sc("Cancel Deal")}`, `user_cancel_${ticket.ticketId}`);
+}
+
+function actionConfirmationKeyboard(
+  ticketId: string,
+  action: "complete" | "scam" | "cancel"
+): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
+    .row()
+    .text(`✅  ${sc("Confirm")} ${sc(action)}`, `confirm_${action}_${ticketId}`)
+    .row()
+    .text(`↩️  ${sc("Go Back")}`, `back_ticket_${ticketId}`);
+}
+
+function roleKeyboard(ticketId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
+    .row()
+    .text(`🛒  ${sc("I am the Buyer")}`, `role_buyer_${ticketId}`)
+    .row()
+    .text(`💰  ${sc("I am the Seller")}`, `role_seller_${ticketId}`);
+}
+
+function roleConfirmationKeyboard(
+  ticketId: string,
+  role: "buyer" | "seller"
+): InlineKeyboard {
+  return new InlineKeyboard()
+    .url(`📤  ${sc("Share Ticket")}`, shareTicketUrl(ticketId))
+    .row()
+    .text(`✅  ${sc("Confirm")} ${sc(role)}`, `confirm_role_${role}_${ticketId}`);
+}
+
+function shareOnlyKeyboard(ticketId: string): InlineKeyboard {
+  return new InlineKeyboard().url(
+    `📤  ${sc("Share Ticket")}`,
+    shareTicketUrl(ticketId)
+  );
+}
+
+async function notifyAdminIfReady(ticket: CompletedTicket): Promise<void> {
+  if (
+    ticket.adminNotified ||
+    !ticket.creatorCompleteConfirmed ||
+    !ticket.buyerConfirmed ||
+    !ticket.sellerConfirmed
+  ) {
+    return;
+  }
+
+  const adminKeyboard = new InlineKeyboard().text(
+    `✅  ${sc("Approve Deal")}`,
+    `approve_${ticket.ticketId}`
+  );
+  await bot.api.sendMessage(ADMIN_ID, formatAdminNotification(ticket), {
+    reply_markup: adminKeyboard,
+  });
+  ticket.adminNotified = true;
 }
 
 // Fetch bot username on startup for deep-link construction
@@ -73,6 +205,14 @@ bot.command("ticket", async (ctx) => {
     return;
   }
 
+  const requesterId = ctx.from!.id;
+  if (!(await hasRequiredMembership(requesterId))) {
+    await ctx.reply(JOIN_TEXT, {
+      reply_markup: membershipKeyboard(requesterId),
+    });
+    return;
+  }
+
   if (!botUsername) {
     await ctx.reply(sc("Bot is still starting up. Please try again shortly."));
     return;
@@ -81,10 +221,22 @@ bot.command("ticket", async (ctx) => {
   const groupId = chat.id;
   const keyboard = new InlineKeyboard().url(
     `📋  ${sc("Open Ticket Form")}`,
-    `https://t.me/${botUsername}?start=tkt_${groupId}`
+    `https://t.me/${botUsername}?start=tkt_${groupId}_${requesterId}`
   );
 
-  await ctx.reply(formatGroupTicketRequest(), { reply_markup: keyboard });
+  const key = `${groupId}:${requesterId}`;
+  const oldMessageId = pendingOpenMessages.get(key);
+  if (oldMessageId) {
+    try {
+      await bot.api.deleteMessage(groupId, oldMessageId);
+    } catch {
+      // It may already have been deleted by a group moderator.
+    }
+  }
+  const sentMessage = await ctx.reply(formatGroupTicketRequest(), {
+    reply_markup: keyboard,
+  });
+  pendingOpenMessages.set(key, sentMessage.message_id);
 });
 
 // ── /start — DM: begin form ───────────────────────────────────────────────────
@@ -93,6 +245,27 @@ bot.command("start", async (ctx) => {
   if (ctx.chat.type !== "private") return;
 
   const payload = ctx.match ?? "";
+  const userId = ctx.from!.id;
+
+  if (!(await hasRequiredMembership(userId))) {
+    await ctx.reply(JOIN_TEXT, {
+      reply_markup: membershipKeyboard(userId),
+    });
+    return;
+  }
+
+  if (payload.startsWith("share_")) {
+    const ticketId = payload.slice("share_".length);
+    const ticket = completedTickets.get(ticketId);
+    if (!ticket) {
+      await ctx.reply(`⚠️  ${sc("This ticket is closed or no longer available.")}`);
+      return;
+    }
+    await ctx.reply(formatSharedTicket(ticket), {
+      reply_markup: roleKeyboard(ticket.ticketId),
+    });
+    return;
+  }
 
   // Regular /start with no payload
   if (!payload.startsWith("tkt_")) {
@@ -108,16 +281,27 @@ bot.command("start", async (ctx) => {
   }
 
   // Deep-link start from group button
-  const groupIdStr = payload.slice(4); // strip "tkt_"
-  const groupId = parseInt(groupIdStr, 10);
-  if (isNaN(groupId)) {
+  const parts = payload.slice(4).split("_"); // strip "tkt_"
+  const groupId = parseInt(parts[0], 10);
+  const creatorId = parseInt(parts[1] ?? "", 10);
+  if (isNaN(groupId) || isNaN(creatorId) || creatorId !== userId) {
     await ctx.reply(
       `⚠️  ${sc("Invalid ticket link. Please use /ticket in a group and try again.")}`
     );
     return;
   }
 
-  const userId = ctx.from!.id;
+  // Remove the group prompt as soon as its creator opens the private form.
+  const promptKey = `${groupId}:${userId}`;
+  const promptMessageId = pendingOpenMessages.get(promptKey);
+  if (promptMessageId) {
+    try {
+      await bot.api.deleteMessage(groupId, promptMessageId);
+    } catch (err) {
+      console.error("Could not delete the group form prompt:", (err as Error).message);
+    }
+    pendingOpenMessages.delete(promptKey);
+  }
 
   // Prevent duplicate sessions
   if (sessions.has(userId)) {
@@ -236,20 +420,18 @@ bot.on("message:text", async (ctx) => {
       session.facilitator = text;
       sessions.delete(userId); // Form complete; remove session
 
-      const completed: CompletedTicket = { ...session, facilitator: text };
+      const completed: CompletedTicket = {
+        ...session,
+        facilitator: text,
+        creatorCompleteConfirmed: false,
+        buyerConfirmed: false,
+        sellerConfirmed: false,
+        adminNotified: false,
+      };
       completedTickets.set(session.ticketId, completed);
 
-      // The ticket creator must confirm the deal is complete before the
-      // admin receives the approval action.
-      const userKeyboard = new InlineKeyboard()
-        .text(`✅  ${sc("Deal Complete")}`, `user_complete_${session.ticketId}`)
-        .row()
-        .text(`🚨  ${sc("Scam Deal")}`, `user_scam_${session.ticketId}`)
-        .row()
-        .text(`❌  ${sc("Cancel Deal")}`, `user_cancel_${session.ticketId}`);
-
       await ctx.reply(formatTicketSummary(completed), {
-        reply_markup: userKeyboard,
+        reply_markup: pendingTicketKeyboard(completed),
       });
       return; // Session already deleted; skip the set below
     }
@@ -259,37 +441,200 @@ bot.on("message:text", async (ctx) => {
   sessions.set(userId, session);
 });
 
-// ── Callback queries — Admin approval ─────────────────────────────────────────
+// ── Callback queries — access, shared tickets, confirmations & approval ───────
 
 bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
 
-  if (
-    !data.startsWith("approve_") &&
-    !data.startsWith("user_complete_") &&
-    !data.startsWith("user_scam_") &&
-    !data.startsWith("user_cancel_")
-  ) {
-    await ctx.answerCallbackQuery();
+  if (data.startsWith("verify_access_")) {
+    if (await hasRequiredMembership(ctx.from.id)) {
+      await ctx.editMessageText(
+        `✅  ${sc("Membership verified.")}\n\n` +
+          sc("You can now use the ticket system.")
+      );
+      await ctx.answerCallbackQuery({ text: "✅  Access verified." });
+    } else {
+      await ctx.answerCallbackQuery({
+        text: "⚠️  Please join both channels first.",
+        show_alert: true,
+      });
+    }
     return;
   }
 
-  const isAdminApproval = data.startsWith("approve_");
-  const userAction = data.match(/^user_(complete|scam|cancel)_(.+)$/);
-  const ticketId = isAdminApproval
-    ? data.slice("approve_".length)
-    : userAction?.[2];
-
-  if (!ticketId) {
+  if (data.startsWith("open_form_")) {
+    const requesterId = Number(data.slice("open_form_".length));
+    if (ctx.from.id !== requesterId) {
+      await ctx.answerCallbackQuery({
+        text: "⛔  Only the person who used /ticket can open this form.",
+        show_alert: true,
+      });
+      return;
+    }
     await ctx.answerCallbackQuery({
-      text: "⚠️  Ticket not found.",
-      show_alert: true,
+      text: "📩  Open the private chat button to fill the form.",
     });
     return;
   }
 
-  // Only the designated admin can approve.
-  if (isAdminApproval && ctx.from.id !== ADMIN_ID) {
+  const roleMatch = data.match(/^role_(buyer|seller)_(.+)$/);
+  if (roleMatch) {
+    const ticketId = roleMatch[2];
+    const ticket = completedTickets.get(ticketId);
+    if (!ticket) {
+      await ctx.answerCallbackQuery({ text: "⚠️  Ticket is closed.", show_alert: true });
+      return;
+    }
+    const role = roleMatch[1] as "buyer" | "seller";
+    const claimedId = role === "buyer" ? ticket.buyerUserId : ticket.sellerUserId;
+    if (claimedId && claimedId !== ctx.from.id) {
+      await ctx.answerCallbackQuery({
+        text: `⛔  The ${role} role is already confirmed by another user.`,
+        show_alert: true,
+      });
+      return;
+    }
+    roleSelections.set(ctx.from.id, { ticketId, role });
+    await ctx.editMessageText(formatPartyConfirmation(ticket, role), {
+      reply_markup: roleConfirmationKeyboard(ticketId, role),
+    });
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  const roleConfirmMatch = data.match(/^confirm_role_(buyer|seller)_(.+)$/);
+  if (roleConfirmMatch) {
+    const ticketId = roleConfirmMatch[2];
+    const ticket = completedTickets.get(ticketId);
+    const role = roleConfirmMatch[1] as "buyer" | "seller";
+    const selection = roleSelections.get(ctx.from.id);
+    if (!ticket || !selection || selection.ticketId !== ticketId || selection.role !== role) {
+      await ctx.answerCallbackQuery({
+        text: "⚠️  Please select your role again.",
+        show_alert: true,
+      });
+      return;
+    }
+    const claimedId = role === "buyer" ? ticket.buyerUserId : ticket.sellerUserId;
+    if (claimedId && claimedId !== ctx.from.id) {
+      await ctx.answerCallbackQuery({
+        text: "⛔  This role is already confirmed.",
+        show_alert: true,
+      });
+      return;
+    }
+    if (role === "buyer") {
+      ticket.buyerUserId = ctx.from.id;
+      ticket.buyerConfirmed = true;
+    } else {
+      ticket.sellerUserId = ctx.from.id;
+      ticket.sellerConfirmed = true;
+    }
+    roleSelections.delete(ctx.from.id);
+    await ctx.editMessageText(
+      formatSharedTicket(ticket) +
+        "\n\n" +
+        `✅  ${sc(role)} ${sc("confirmed.")}\n` +
+        `⏳  ${sc("Waiting for the other party and ticket creator.")}`,
+      { reply_markup: shareOnlyKeyboard(ticketId) }
+    );
+    try {
+      await notifyAdminIfReady(ticket);
+    } catch (err) {
+      console.error("Failed to notify admin:", (err as Error).message);
+    }
+    await ctx.answerCallbackQuery({ text: `✅  ${role} confirmation saved.` });
+    return;
+  }
+
+  const backMatch = data.match(/^back_ticket_(.+)$/);
+  if (backMatch) {
+    const ticket = completedTickets.get(backMatch[1]);
+    if (!ticket || ctx.from.id !== ticket.userId) {
+      await ctx.answerCallbackQuery({ text: "⛔  Not your ticket.", show_alert: true });
+      return;
+    }
+    await ctx.editMessageText(formatTicketSummary(ticket), {
+      reply_markup: pendingTicketKeyboard(ticket),
+    });
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  const actionMatch = data.match(/^user_(complete|scam|cancel)_(.+)$/);
+  if (actionMatch) {
+    const ticketId = actionMatch[2];
+    const ticket = completedTickets.get(ticketId);
+    if (!ticket || ctx.from.id !== ticket.userId) {
+      await ctx.answerCallbackQuery({
+        text: "⛔  Only the ticket creator can choose this.",
+        show_alert: true,
+      });
+      return;
+    }
+    const action = actionMatch[1] as "complete" | "scam" | "cancel";
+    await ctx.editMessageText(
+      formatTicketSummary(ticket) +
+        "\n\n" +
+        `⚠️  ${sc(`Confirm ${action.toUpperCase()}? This action cannot be undone.`)}`,
+      { reply_markup: actionConfirmationKeyboard(ticketId, action) }
+    );
+    await ctx.answerCallbackQuery();
+    return;
+  }
+
+  const confirmMatch = data.match(/^confirm_(complete|scam|cancel)_(.+)$/);
+  if (confirmMatch) {
+    const ticketId = confirmMatch[2];
+    const ticket = completedTickets.get(ticketId);
+    if (!ticket || ctx.from.id !== ticket.userId) {
+      await ctx.answerCallbackQuery({
+        text: "⛔  Only the ticket creator can confirm this.",
+        show_alert: true,
+      });
+      return;
+    }
+    const action = confirmMatch[1] as "complete" | "scam" | "cancel";
+    if (action === "complete") {
+      ticket.creatorCompleteConfirmed = true;
+      try {
+        await notifyAdminIfReady(ticket);
+      } catch (err) {
+        console.error("Failed to notify admin:", (err as Error).message);
+      }
+      await ctx.editMessageText(
+        formatTicketSummary(ticket) +
+          "\n\n" +
+          `⏳  ${sc("DEAL COMPLETE CONFIRMED.")}\n` +
+          `    ${sc("Waiting for buyer and seller confirmation.")}`,
+        { reply_markup: shareOnlyKeyboard(ticketId) }
+      );
+      await ctx.answerCallbackQuery({ text: "✅  Deal completion confirmed." });
+      return;
+    }
+
+    const groupMessage = action === "scam"
+      ? await bot.api.sendMessage(ticket.groupId, formatGroupScamReport(ticket))
+      : await bot.api.sendMessage(ticket.groupId, formatGroupCancellation(ticket));
+    void groupMessage;
+    await ctx.editMessageText(
+      formatTicketSummary(ticket) +
+        "\n\n" +
+        `✅  ${sc(action === "scam" ? "SCAM REPORTED — TICKET CLOSED" : "DEAL CANCELLED — TICKET CLOSED")}`
+    );
+    completedTickets.delete(ticketId);
+    await ctx.answerCallbackQuery({
+      text: action === "scam" ? "🚨  Scam reported. Ticket closed." : "❌  Deal cancelled.",
+    });
+    return;
+  }
+
+  const isAdminApproval = data.startsWith("approve_");
+  if (!isAdminApproval) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  if (ctx.from.id !== ADMIN_ID) {
     await ctx.answerCallbackQuery({
       text: "⛔  You are not authorized to approve tickets.",
       show_alert: true,
@@ -297,8 +642,8 @@ bot.on("callback_query:data", async (ctx) => {
     return;
   }
 
+  const ticketId = data.slice("approve_".length);
   const ticket = completedTickets.get(ticketId);
-
   if (!ticket) {
     await ctx.answerCallbackQuery({
       text: "⚠️  Ticket not found or already processed.",
@@ -306,110 +651,43 @@ bot.on("callback_query:data", async (ctx) => {
     });
     return;
   }
-
-  // User actions belong only to the person who created this ticket.
-  if (!isAdminApproval && ctx.from.id !== ticket.userId) {
+  if (!ticket.creatorCompleteConfirmed || !ticket.buyerConfirmed || !ticket.sellerConfirmed) {
     await ctx.answerCallbackQuery({
-      text: "⛔  Only the ticket creator can choose this option.",
+      text: "⚠️  Creator, buyer and seller must all confirm first.",
       show_alert: true,
     });
     return;
   }
 
-  if (!isAdminApproval) {
-    const action = userAction![1];
-
-    if (action === "complete") {
-      // Keep the ticket pending, but now expose the approval button to admin.
-      try {
-        const adminKeyboard = new InlineKeyboard().text(
-          `✅  ${sc("Approve Deal")}`,
-          `approve_${ticket.ticketId}`
-        );
-        await bot.api.sendMessage(
-          ADMIN_ID,
-          formatAdminNotification(ticket),
-          { reply_markup: adminKeyboard }
-        );
-      } catch (err) {
-        console.error("Failed to notify admin:", (err as Error).message);
-        await ctx.answerCallbackQuery({
-          text: "❌  Could not notify the admin. Try again.",
-          show_alert: true,
-        });
-        return;
-      }
-
-      await ctx.editMessageText(
-        formatTicketSummary(ticket) +
-          "\n\n" +
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-          `⏳  ${sc("DEAL COMPLETE — WAITING FOR ADMIN APPROVAL")}\n` +
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      );
-      await ctx.answerCallbackQuery({
-        text: "✅  Admin has been notified for approval.",
-      });
-      return;
-    }
-
-    if (action === "scam") {
-      await bot.api.sendMessage(ticket.groupId, formatGroupScamReport(ticket));
-      await ctx.editMessageText(
-        formatTicketSummary(ticket) +
-          "\n\n" +
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-          `🚨  ${sc("SCAM REPORTED — TICKET CLOSED")}\n` +
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      );
-      completedTickets.delete(ticketId);
-      await ctx.answerCallbackQuery({
-        text: "🚨  Scam report sent to the group. Ticket closed.",
-      });
-      return;
-    }
-
-    // Cancelled tickets are closed immediately and never reach the admin.
-    await bot.api.sendMessage(ticket.groupId, formatGroupCancellation(ticket));
-    await ctx.editMessageText(
-      formatTicketSummary(ticket) +
-        "\n\n" +
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-        `❌  ${sc("DEAL CANCELLED — TICKET CLOSED")}\n` +
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    );
-    completedTickets.delete(ticketId);
-    await ctx.answerCallbackQuery({
-      text: "❌  Deal cancelled. Ticket closed.",
-    });
-    return;
-  }
-
-  // Post closure message in the originating group
+  let groupMessage;
   try {
-    await bot.api.sendMessage(ticket.groupId, formatGroupApproval(ticket));
+    groupMessage = await bot.api.sendMessage(ticket.groupId, formatGroupApproval(ticket));
+    try {
+      await bot.api.pinChatMessage(ticket.groupId, groupMessage.message_id, {
+        disable_notification: false,
+      });
+    } catch (err) {
+      console.error("Could not pin completed deal; bot needs group admin rights:", (err as Error).message);
+    }
   } catch (err) {
     console.error("Failed to post approval to group:", (err as Error).message);
     await ctx.answerCallbackQuery({
-      text: "❌  Could not post to group. Bot may have been removed.",
+      text: "❌  Could not post to group. Bot may be missing permissions.",
       show_alert: true,
     });
     return;
   }
 
-  // Mark admin message as approved (remove button)
   const approvedMsg =
     formatAdminNotification(ticket) +
     "\n\n" +
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
     `✅  ${sc("APPROVED — DEAL VERIFIED & CLOSED")}\n` +
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
-
   await ctx.editMessageText(approvedMsg, { reply_markup: undefined });
-
   completedTickets.delete(ticketId);
   await ctx.answerCallbackQuery({
-    text: "✅  Deal approved! The group has been notified.",
+    text: "✅  Deal approved, posted and pinned in the group.",
   });
 });
 
