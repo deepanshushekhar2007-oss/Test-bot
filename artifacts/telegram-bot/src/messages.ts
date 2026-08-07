@@ -36,6 +36,26 @@ export function formatGroupTicketRequest(): string {
   ].join("\n");
 }
 
+export function formatGroupTicketStarted(
+  firstName: string,
+  username: string | undefined,
+  ticketId: string
+): string {
+  const userLabel = username ? `@${username}` : firstName;
+  return [
+    DIVIDER,
+    `✅  ${sc("Ticket Opened")}`,
+    DIVIDER,
+    "",
+    `👤  ${sc("User")}          :  ${userLabel}`,
+    `🎫  ${sc("Ticket Number")} :  #${ticketId}`,
+    "",
+    `📩  ${sc("Ticket sent in private message.")}`,
+    `    ${sc("Please check your DM with the bot to continue.")}`,
+    DIVIDER,
+  ].join("\n");
+}
+
 // ── Step prompts ─────────────────────────────────────────────────────────────
 
 const STEP_QUESTIONS: Record<number, { icon: string; question: string; hint: string }> = {

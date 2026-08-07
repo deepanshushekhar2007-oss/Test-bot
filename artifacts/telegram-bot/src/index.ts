@@ -3,6 +3,7 @@ import { sc } from "./font";
 import type { SessionData, CompletedTicket } from "./types";
 import {
   formatGroupTicketRequest,
+  formatGroupTicketStarted,
   formatStepPrompt,
   formatTicketSummary,
   formatAdminNotification,
@@ -331,6 +332,14 @@ bot.command("start", async (ctx) => {
   };
 
   sessions.set(userId, session);
+  await bot.api.sendMessage(
+    groupId,
+    formatGroupTicketStarted(
+      ctx.from!.first_name,
+      ctx.from!.username,
+      ticketId
+    )
+  );
   await ctx.reply(formatStepPrompt(1, ticketId));
 });
 
