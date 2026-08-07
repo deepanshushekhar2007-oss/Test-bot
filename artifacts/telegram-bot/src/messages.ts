@@ -109,13 +109,57 @@ export function formatTicketSummary(t: CompletedTicket): string {
     `📈  ${sc("Exchange Rate")} :  ${t.exchangeRate}`,
     `👤  ${sc("Deal Admin")}    :  ${t.facilitator}`,
     `📅  ${sc("Date")}          :  ${fmtDate(t.createdAt)}`,
-    `🔄  ${sc("Status")}        :  🟡 ${sc("Pending Admin Approval")}`,
+    `🔄  ${sc("Status")}        :  🟡 ${sc("Deal In Progress")}`,
     "",
     DIVIDER,
     "",
-    `⏳  ${sc("Your ticket has been submitted to the admin.")}`,
-    `    ${sc("You will be notified once the deal is approved.")}`,
+    `⏳  ${sc("Choose an option below when the deal is finished.")}`,
     "",
+    DIVIDER,
+  ].join("\n");
+}
+
+// ── Group messages for user-selected outcomes ─────────────────────────────────
+
+export function formatGroupScamReport(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `🚨  ${sc("Ticket Closed — Scam Deal Report")}`,
+    DIVIDER,
+    `   ${sc("Ticket Number")}  :  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    `⚠️  ${sc("This deal was reported as a scam by the ticket creator.")}`,
+    "",
+    `📦  ${sc("Item")}          :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}         :  ${t.buyer}`,
+    `💰  ${sc("Seller")}        :  ${t.seller}`,
+    `💵  ${sc("Amount")}        :  ${t.amount} ${t.currency}`,
+    `📈  ${sc("Exchange Rate")} :  ${t.exchangeRate}`,
+    `👤  ${sc("Deal Admin")}    :  ${t.facilitator}`,
+    `📅  ${sc("Date")}          :  ${fmtDate(t.createdAt)}`,
+    "",
+    `🚨  ${sc("Buyer, seller and deal admin have been reported.")}`,
+    `🔒  ${sc("Ticket Closed — Deal Not Completed")}`,
+    DIVIDER,
+  ].join("\n");
+}
+
+export function formatGroupCancellation(t: CompletedTicket): string {
+  return [
+    DIVIDER,
+    `❌  ${sc("Ticket Closed — Deal Cancelled")}  —  #${t.ticketId}`,
+    DIVIDER,
+    "",
+    sc("The ticket creator cancelled this deal."),
+    sc("No admin approval or decline is required."),
+    "",
+    `📦  ${sc("Item")}   :  ${t.commodity}`,
+    `🛒  ${sc("Buyer")}  :  ${t.buyer}`,
+    `💰  ${sc("Seller")} :  ${t.seller}`,
+    `💵  ${sc("Amount")} :  ${t.amount} ${t.currency}`,
+    "",
+    `🔒  ${sc("Ticket Closed — Deal Cancelled")}`,
     DIVIDER,
   ].join("\n");
 }

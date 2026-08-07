@@ -7,6 +7,8 @@ import {
   formatTicketSummary,
   formatAdminNotification,
   formatGroupApproval,
+  formatGroupScamReport,
+  formatGroupCancellation,
 } from "./messages";
 
 // ── Environment ───────────────────────────────────────────────────────────────
@@ -237,23 +239,18 @@ bot.on("message:text", async (ctx) => {
       const completed: CompletedTicket = { ...session, facilitator: text };
       completedTickets.set(session.ticketId, completed);
 
-      // 1. Show full ticket summary to the user
-      await ctx.reply(formatTicketSummary(completed));
+      // The ticket creator must confirm the deal is complete before the
+      // admin receives the approval action.
+      const userKeyboard = new InlineKeyboard()
+        .text(`✅  ${sc("Deal Complete")}`, `user_complete_${session.ticketId}`)
+        .row()
+        .text(`🚨  ${sc("Scam Deal")}`, `user_scam_${session.ticketId}`)
+        .row()
+        .text(`❌  ${sc("Cancel Deal")}`, `user_cancel_${session.ticketId}`);
 
-      // 2. Notify admin with Approve button
-      try {
-        const adminKeyboard = new InlineKeyboard().text(
-          `✅  ${sc("Approve Deal")}`,
-          `approve_${session.ticketId}`
-        );
-        await bot.api.sendMessage(
-          ADMIN_ID,
-          formatAdminNotification(completed),
-          { reply_markup: adminKeyboard }
-        );
-      } catch (err) {
-        console.error("Failed to notify admin:", (err as Error).message);
-      }
+      await ctx.reply(formatTicketSummary(completed), {
+        reply_markup: userKeyboard,
+      });
       return; // Session already deleted; skip the set below
     }
   }
@@ -267,13 +264,32 @@ bot.on("message:text", async (ctx) => {
 bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
 
-  if (!data.startsWith("approve_")) {
+  if (
+    !data.startsWith("approve_") &&
+    !data.startsWith("user_complete_") &&
+    !data.startsWith("user_scam_") &&
+    !data.startsWith("user_cancel_")
+  ) {
     await ctx.answerCallbackQuery();
     return;
   }
 
-  // Only the designated admin can approve
-  if (ctx.from.id !== ADMIN_ID) {
+  const isAdminApproval = data.startsWith("approve_");
+  const userAction = data.match(/^user_(complete|scam|cancel)_(.+)$/);
+  const ticketId = isAdminApproval
+    ? data.slice("approve_".length)
+    : userAction?.[2];
+
+  if (!ticketId) {
+    await ctx.answerCallbackQuery({
+      text: "⚠️  Ticket not found.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  // Only the designated admin can approve.
+  if (isAdminApproval && ctx.from.id !== ADMIN_ID) {
     await ctx.answerCallbackQuery({
       text: "⛔  You are not authorized to approve tickets.",
       show_alert: true,
@@ -281,13 +297,90 @@ bot.on("callback_query:data", async (ctx) => {
     return;
   }
 
-  const ticketId = data.slice(8); // strip "approve_"
   const ticket = completedTickets.get(ticketId);
 
   if (!ticket) {
     await ctx.answerCallbackQuery({
       text: "⚠️  Ticket not found or already processed.",
       show_alert: true,
+    });
+    return;
+  }
+
+  // User actions belong only to the person who created this ticket.
+  if (!isAdminApproval && ctx.from.id !== ticket.userId) {
+    await ctx.answerCallbackQuery({
+      text: "⛔  Only the ticket creator can choose this option.",
+      show_alert: true,
+    });
+    return;
+  }
+
+  if (!isAdminApproval) {
+    const action = userAction![1];
+
+    if (action === "complete") {
+      // Keep the ticket pending, but now expose the approval button to admin.
+      try {
+        const adminKeyboard = new InlineKeyboard().text(
+          `✅  ${sc("Approve Deal")}`,
+          `approve_${ticket.ticketId}`
+        );
+        await bot.api.sendMessage(
+          ADMIN_ID,
+          formatAdminNotification(ticket),
+          { reply_markup: adminKeyboard }
+        );
+      } catch (err) {
+        console.error("Failed to notify admin:", (err as Error).message);
+        await ctx.answerCallbackQuery({
+          text: "❌  Could not notify the admin. Try again.",
+          show_alert: true,
+        });
+        return;
+      }
+
+      await ctx.editMessageText(
+        formatTicketSummary(ticket) +
+          "\n\n" +
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+          `⏳  ${sc("DEAL COMPLETE — WAITING FOR ADMIN APPROVAL")}\n` +
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      );
+      await ctx.answerCallbackQuery({
+        text: "✅  Admin has been notified for approval.",
+      });
+      return;
+    }
+
+    if (action === "scam") {
+      await bot.api.sendMessage(ticket.groupId, formatGroupScamReport(ticket));
+      await ctx.editMessageText(
+        formatTicketSummary(ticket) +
+          "\n\n" +
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+          `🚨  ${sc("SCAM REPORTED — TICKET CLOSED")}\n` +
+          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      );
+      completedTickets.delete(ticketId);
+      await ctx.answerCallbackQuery({
+        text: "🚨  Scam report sent to the group. Ticket closed.",
+      });
+      return;
+    }
+
+    // Cancelled tickets are closed immediately and never reach the admin.
+    await bot.api.sendMessage(ticket.groupId, formatGroupCancellation(ticket));
+    await ctx.editMessageText(
+      formatTicketSummary(ticket) +
+        "\n\n" +
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+        `❌  ${sc("DEAL CANCELLED — TICKET CLOSED")}\n` +
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    completedTickets.delete(ticketId);
+    await ctx.answerCallbackQuery({
+      text: "❌  Deal cancelled. Ticket closed.",
     });
     return;
   }
