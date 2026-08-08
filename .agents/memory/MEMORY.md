@@ -1,0 +1,1 @@
+- [GitHub deployment branch](github-deployment-branch.md) — the requested repository already had a different main history, so the Telegram bot was pushed to its own Render-ready branch.
