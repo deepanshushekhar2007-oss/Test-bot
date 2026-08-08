@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
+import { createServer } from "node:http";
 import { sc } from "./font";
 import type { SessionData, CompletedTicket } from "./types";
 import {
@@ -70,6 +71,19 @@ const roleSelections = new Map<
   number,
   { ticketId: string; role: "buyer" | "seller"; action: "share" | "complete" }
 >();
+
+// Render Web Services require an HTTP listener. The bot still uses Telegram
+// long polling for updates; this endpoint only keeps the service healthy.
+const PORT = Number(process.env.PORT ?? 10000);
+const healthServer = createServer((req, res) => {
+  if (req.url === "/healthz" || req.url === "/") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, service: "telegram-bot" }));
+    return;
+  }
+  res.writeHead(404);
+  res.end("Not found");
+});
 
 function generateTicketId(): string {
   return String(ticketCounter++).padStart(6, "0");
@@ -725,6 +739,9 @@ bot.catch((err) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 console.log("🚀  Starting Telegram bot...");
+healthServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅  Health server listening on port ${PORT}`);
+});
 bot.start({
   onStart: (info) => {
     console.log(`✅  @${info.username} is live and listening`);

@@ -5,6 +5,8 @@ A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` i
 ## Run & Operate
 
 - `pnpm --filter @workspace/telegram-bot run dev` — run the Telegram bot (uses long polling)
+- Render Web Service build: `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck`
+- Render Web Service start: `pnpm --filter @workspace/telegram-bot run start`
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 
@@ -41,6 +43,8 @@ A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` i
 
 - `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_ID` must be set as Replit Secrets
 - `ADMIN_TELEGRAM_ID` must be the numeric user ID (get it from @userinfobot), not a username
+- On Render, set `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_ID` in the Environment tab; changing `ADMIN_TELEGRAM_ID` changes the approving admin after redeploy
+- Render's `render.yaml` configures a free Web Service and `/healthz` health check
 - Bot must be added to the group as a member (doesn't need admin rights to post)
 - Bot must be an admin in both required channels to verify membership, and a group admin to pin completed deals and delete prompts
 - In-memory state: sessions and tickets reset on bot restart

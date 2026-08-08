@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: test-bot
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck
+    startCommand: pnpm --filter @workspace/telegram-bot run start
+    healthCheckPath: /healthz
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
