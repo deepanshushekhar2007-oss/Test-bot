@@ -3,7 +3,7 @@ services:
     name: test-bot
     runtime: node
     plan: free
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck
     startCommand: pnpm --filter @workspace/telegram-bot run start
     healthCheckPath: /healthz
     envVars:

@@ -15,7 +15,7 @@ You can use the included `render.yaml`, or enter these values manually:
 - **Build Command:**
 
   ```bash
-  corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck
+  pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck
   ```
 
 - **Start Command:**

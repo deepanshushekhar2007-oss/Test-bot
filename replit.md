@@ -5,7 +5,7 @@ A Telegram bot that manages deal/escrow tickets in groups. Users run `/ticket` i
 ## Run & Operate
 
 - `pnpm --filter @workspace/telegram-bot run dev` — run the Telegram bot (uses long polling)
-- Render Web Service build: `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck`
+- Render Web Service build: `pnpm install --frozen-lockfile && pnpm --filter @workspace/telegram-bot run typecheck`
 - Render Web Service start: `pnpm --filter @workspace/telegram-bot run start`
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
